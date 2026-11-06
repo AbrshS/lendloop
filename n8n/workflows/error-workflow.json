@@ -1,0 +1,33 @@
+{
+  "name": "LendLoop - Error Workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "node-error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const errData = $input.first().json;\nconst workflowName = errData.workflow?.name || 'Unknown Workflow';\nconst errorMsg = errData.execution?.error?.message || 'Unknown error occurred';\nconst executionId = errData.execution?.id || 'n/a';\n\nconsole.error(`[LendLoop Automation Error] Workflow: ${workflowName} (Execution: ${executionId}) failed: ${errorMsg}`);\n\nreturn [{\n  json: {\n    alert: true,\n    workflow: workflowName,\n    executionId,\n    errorMessage: errorMsg,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-log-error-alert",
+      "name": "Log & Alert Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [{ "node": "Log & Alert Error", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

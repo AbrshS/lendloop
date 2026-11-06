@@ -1,0 +1,112 @@
+{
+  "name": "LendLoop - Overdue Reminders",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "node-schedule-daily",
+      "name": "Schedule (Daily 09:00)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.CONVEX_HTTP_URL || 'http://localhost:3000' }}/overdue-loans",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lendloop-api-secret",
+              "value": "={{ $env.N8N_API_SECRET || 'dev_api_secret_123' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-fetch-overdue",
+      "name": "Fetch Overdue Loans",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst overdue = response.overdue || [];\nif (overdue.length === 0) {\n  return [];\n}\n\nconst today = new Date().toISOString().split('T')[0];\nreturn overdue.map((loan) => ({\n  json: {\n    ...loan,\n    today,\n    idempotencyKey: `overdue:${loan.loanId}:${today}`\n  }\n}));"
+      },
+      "id": "node-split-overdue",
+      "name": "Split & Generate Keys",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconsole.log(`[LendLoop Overdue Reminder] Sent to ${item.borrowerName} for ${item.toolName} (Due ${item.dueDate}, ${item.daysOverdue} days overdue)`);\nreturn [{ json: item }];"
+      },
+      "id": "node-send-reminder",
+      "name": "Send Overdue Reminder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.CONVEX_HTTP_URL || 'http://localhost:3000' }}/reminder-status",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lendloop-api-secret",
+              "value": "={{ $env.N8N_API_SECRET || 'dev_api_secret_123' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"loanId\": \"{{ $json.loanId }}\",\n  \"idempotencyKey\": \"{{ $json.idempotencyKey }}\",\n  \"type\": \"overdue_reminder\",\n  \"payload\": {\n    \"daysOverdue\": {{ $json.daysOverdue }},\n    \"dueDate\": \"{{ $json.dueDate }}\"\n  }\n}",
+        "options": {}
+      },
+      "id": "node-record-status",
+      "name": "Record Status (Idempotent)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 300]
+    }
+  ],
+  "connections": {
+    "Schedule (Daily 09:00)": {
+      "main": [
+        [{ "node": "Fetch Overdue Loans", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Overdue Loans": {
+      "main": [
+        [{ "node": "Split & Generate Keys", "type": "main", "index": 0 }]
+      ]
+    },
+    "Split & Generate Keys": {
+      "main": [
+        [{ "node": "Send Reminder", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send Reminder": {
+      "main": [
+        [{ "node": "Record Status (Idempotent)", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

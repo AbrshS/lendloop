@@ -1,0 +1,30 @@
+# ─────────────────────────────────────────────────────────────
+# Self-hosted n8n for LendLoop automation.
+# Runs the three workflows in n8n/workflows/.
+#
+# Run:  docker compose up -d
+# UI:   http://localhost:5678
+# ─────────────────────────────────────────────────────────────
+
+services:
+  n8n:
+    # Pinned image — never use :latest in production.
+    image: n8nio/n8n:1.62.4
+    container_name: lendloop-n8n
+    restart: unless-stopped
+    ports:
+      - '5678:5678'
+    environment:
+      # Encrypt stored credentials. Set a strong value in .env (never commit it).
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      # Allow the built-in crypto module in Function nodes (HMAC verify).
+      NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      # Run n8n in the current folder, persist across restarts.
+      N8N_USER_FOLDER: /home/node/.n8n
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # Mount exported workflows for easy import (read-only).
+      - ./n8n/workflows:/workflows:ro
+
+volumes:
+  n8n_data:

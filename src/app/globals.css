@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bench: #EDF1EF;
+  --surface: #FFFFFF;
+  --ink: #1B2B33;
+  --ink-soft: #53656E;
+  --line: #CBD5D1;
+  --loop: #0F766E;
+  --tape: #F5C518;
+  --available: #2F7D4F;
+  --onloan: #3B5B8C;
+  --pending: #9A6A12;
+  --danger: #B3261E;
+
+  --background: 154 7% 94%;
+  --foreground: 201 31% 15%;
+  --card: 0 0% 100%;
+  --card-foreground: 201 31% 15%;
+  --primary: 201 31% 15%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 154 7% 94%;
+  --secondary-foreground: 201 31% 15%;
+  --muted: 200 14% 38%;
+  --muted-foreground: 200 14% 38%;
+  --accent: 46 92% 53%;
+  --accent-foreground: 201 31% 15%;
+  --destructive: 4 67% 41%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 157 8% 81%;
+  --input: 157 8% 81%;
+  --ring: 175 77% 26%;
+  --radius: 0.5rem;
+}
+
+body {
+  background-color: var(--bench);
+  color: var(--ink);
+  font-family: var(--font-public-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+}
+
+/* Tool hang tag clipped top-right corner (docs/03_UI_DESIGN.md section 2) */
+.tool-tag {
+  clip-path: polygon(
+    0 0,
+    calc(100% - 20px) 0,
+    100% 20px,
+    100% 100%,
+    0 100%
+  );
+}
+
+/* Punched hole at top-left */
+.tag-hole {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background-color: var(--bench);
+  box-shadow: 0 0 0 3px var(--tape);
+}

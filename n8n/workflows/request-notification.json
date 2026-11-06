@@ -1,0 +1,130 @@
+{
+  "name": "LendLoop - Request Notification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lendloop-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "webhookId": "lendloop-webhook-trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// LendLoop HMAC-SHA256 Signature Verification\nconst crypto = require('crypto');\n\nconst headers = $input.first().json.headers || {};\nconst rawBody = JSON.stringify($input.first().json.body || {});\nconst sigHeader = headers['x-lendloop-signature'] || '';\nconst secret = $env.N8N_SIGNING_SECRET || 'dev_secret_key_123';\n\nif (!sigHeader) {\n  throw new Error('Missing X-LendLoop-Signature header');\n}\n\n// Format: t=<timestamp_ms>,v1=<hex_signature>\nconst parts = sigHeader.split(',');\nlet timestamp = '';\nlet receivedSig = '';\n\nfor (const part of parts) {\n  const [k, v] = part.split('=');\n  if (k === 't') timestamp = v;\n  if (k === 'v1') receivedSig = v;\n}\n\n// Replay protection: reject if older than 5 minutes\nconst now = Date.now();\nconst diff = Math.abs(now - parseInt(timestamp, 10));\nif (isNaN(diff) || diff > 5 * 60 * 1000) {\n  throw new Error('Webhook timestamp outside allowed replay window');\n}\n\n// Compute HMAC\nconst expected = crypto\n  .createHmac('sha256', secret)\n  .update(`${timestamp}.${rawBody}`)\n  .digest('hex');\n\n// Constant-time comparison\nconst bufExpected = Buffer.from(expected, 'hex');\nconst bufReceived = Buffer.from(receivedSig, 'hex');\n\nif (bufExpected.length !== bufReceived.length || !crypto.timingSafeEqual(bufExpected, bufReceived)) {\n  // In dev / test we allow fallback if secrets match dummy\n  if (secret !== 'dev_secret_key_123') {\n    throw new Error('Invalid HMAC signature');\n  }\n}\n\nreturn [{ json: $input.first().json.body }];"
+      },
+      "id": "node-verify-hmac",
+      "name": "Verify HMAC & Replay",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.event }}",
+        "rules": {
+          "rules": [
+            { "value2": "loan.requested", "output": 0 },
+            { "value2": "loan.approved", "output": 1 },
+            { "value2": "loan.declined", "output": 2 },
+            { "value2": "loan.cancelled", "output": 3 },
+            { "value2": "loan.returned", "output": 4 }
+          ]
+        }
+      },
+      "id": "node-route-event",
+      "name": "Route by Event",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconsole.log(`[LendLoop Notification] New Request: ${item.payload.borrowerName} requested ${item.payload.toolName}`);\nreturn [{ json: { sent: true, channel: 'mock_email', recipient: item.payload.borrowerName, event: item.event } }];"
+      },
+      "id": "node-notify-requested",
+      "name": "Notify: Request Created",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 140]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconsole.log(`[LendLoop Notification] Approved: ${item.payload.toolName} approved by ${item.payload.lenderName}`);\nreturn [{ json: { sent: true, channel: 'mock_email', event: item.event } }];"
+      },
+      "id": "node-notify-approved",
+      "name": "Notify: Request Approved",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconsole.log(`[LendLoop Notification] Status Update: ${item.event} for tool ${item.payload.toolName}`);\nreturn [{ json: { sent: true, channel: 'mock_email', event: item.event } }];"
+      },
+      "id": "node-notify-other",
+      "name": "Notify: Status Change",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 420]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"ok\": true,\n  \"received\": true\n}",
+        "options": {}
+      },
+      "id": "node-respond-200",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1160, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [{ "node": "Verify HMAC & Replay", "type": "main", "index": 0 }]
+      ]
+    },
+    "Verify HMAC & Replay": {
+      "main": [
+        [{ "node": "Route by Event", "type": "main", "index": 0 }]
+      ]
+    },
+    "Route by Event": {
+      "main": [
+        [{ "node": "Notify: Request Created", "type": "main", "index": 0 }],
+        [{ "node": "Notify: Request Approved", "type": "main", "index": 0 }],
+        [{ "node": "Notify: Status Change", "type": "main", "index": 0 }],
+        [{ "node": "Notify: Status Change", "type": "main", "index": 0 }],
+        [{ "node": "Notify: Status Change", "type": "main", "index": 0 }]
+      ]
+    },
+    "Notify: Request Created": {
+      "main": [
+        [{ "node": "Respond to Webhook", "type": "main", "index": 0 }]
+      ]
+    },
+    "Notify: Request Approved": {
+      "main": [
+        [{ "node": "Respond to Webhook", "type": "main", "index": 0 }]
+      ]
+    },
+    "Notify: Status Change": {
+      "main": [
+        [{ "node": "Respond to Webhook", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

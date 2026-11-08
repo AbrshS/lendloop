@@ -16,9 +16,14 @@ services:
       - '5678:5678'
     environment:
       # Encrypt stored credentials. Set a strong value in .env (never commit it).
-      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
-      # Allow the built-in crypto module in Function nodes (HMAC verify).
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-lendloop_secret_encryption_key_change_me_in_prod}
+      # Allow the built-in crypto module in Function/Code nodes (HMAC verify).
       NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      # Environment secrets for LendLoop workflows
+      N8N_SIGNING_SECRET: ${N8N_SIGNING_SECRET:-dev_signing_secret_12345678}
+      N8N_API_SECRET: ${N8N_API_SECRET:-dev_api_secret_12345678}
+      CONVEX_SITE_URL: ${CONVEX_SITE_URL:-http://localhost:3000}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
       # Run n8n in the current folder, persist across restarts.
       N8N_USER_FOLDER: /home/node/.n8n
     volumes:

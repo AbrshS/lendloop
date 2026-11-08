@@ -8,10 +8,11 @@
  *
  * `verify` is constant-time and rejects replays older than the skew window.
  *
- * Uses node:crypto so it works both in Convex actions and in Vitest (node).
+ * Uses pure JS HMAC-SHA256 so it works seamlessly across Convex's V8 runtime,
+ * actions, and Node/Vitest with zero native Node dependencies.
  */
 
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { computeHmacSha256Hex } from './crypto';
 import { AppError } from '../domain/errors';
 
 /** Maximum allowed age of a signature, in milliseconds (default 5 minutes). */
@@ -59,7 +60,7 @@ export class HmacSigner {
   /**
    * Verify a received header against a body.
    *
-   * @param body   raw request body string
+   * @param body    raw request body string
    * @param header  the `X-LendLoop-Signature` header value
    * @param now     current time (injectable for tests); defaults to Date.now()
    * @returns true if the signature is valid and within the skew window
@@ -81,9 +82,7 @@ export class HmacSigner {
 
   /** Compute the hex HMAC for a body + timestamp. */
   private compute(body: string, timestamp: number): string {
-    return createHmac('sha256', this.secret)
-      .update(`${timestamp}.${body}`)
-      .digest('hex');
+    return computeHmacSha256Hex(this.secret, `${timestamp}.${body}`);
   }
 
   /** Parse `t=<n>,v1=<hex>` into its parts, or null if malformed. */
@@ -102,9 +101,9 @@ export class HmacSigner {
 /** Constant-time comparison of two hex strings of equal length. */
 function safeEqualHex(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
-  try {
-    return timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
-  } catch {
-    return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
+  return diff === 0;
 }

@@ -1,130 +1,350 @@
 {
-  "name": "LendLoop - Request Notification",
+  "name": "LendLoop - Request notification",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "lendloop-webhook",
+        "path": "lendloop-request-events",
         "responseMode": "responseNode",
-        "options": {}
+        "options": {
+          "rawBody": true
+        }
       },
-      "id": "node-webhook-trigger",
+      "id": "7cd45d54-7fde-4c8b-a9ff-5202f16cb558",
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [220, 300],
-      "webhookId": "lendloop-webhook-trigger"
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "951d9388-0731-4274-aaef-22259e99a4fb"
     },
     {
       "parameters": {
-        "jsCode": "// LendLoop HMAC-SHA256 Signature Verification\nconst crypto = require('crypto');\n\nconst headers = $input.first().json.headers || {};\nconst rawBody = JSON.stringify($input.first().json.body || {});\nconst sigHeader = headers['x-lendloop-signature'] || '';\nconst secret = $env.N8N_SIGNING_SECRET || 'dev_secret_key_123';\n\nif (!sigHeader) {\n  throw new Error('Missing X-LendLoop-Signature header');\n}\n\n// Format: t=<timestamp_ms>,v1=<hex_signature>\nconst parts = sigHeader.split(',');\nlet timestamp = '';\nlet receivedSig = '';\n\nfor (const part of parts) {\n  const [k, v] = part.split('=');\n  if (k === 't') timestamp = v;\n  if (k === 'v1') receivedSig = v;\n}\n\n// Replay protection: reject if older than 5 minutes\nconst now = Date.now();\nconst diff = Math.abs(now - parseInt(timestamp, 10));\nif (isNaN(diff) || diff > 5 * 60 * 1000) {\n  throw new Error('Webhook timestamp outside allowed replay window');\n}\n\n// Compute HMAC\nconst expected = crypto\n  .createHmac('sha256', secret)\n  .update(`${timestamp}.${rawBody}`)\n  .digest('hex');\n\n// Constant-time comparison\nconst bufExpected = Buffer.from(expected, 'hex');\nconst bufReceived = Buffer.from(receivedSig, 'hex');\n\nif (bufExpected.length !== bufReceived.length || !crypto.timingSafeEqual(bufExpected, bufReceived)) {\n  // In dev / test we allow fallback if secrets match dummy\n  if (secret !== 'dev_secret_key_123') {\n    throw new Error('Invalid HMAC signature');\n  }\n}\n\nreturn [{ json: $input.first().json.body }];"
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Verifies HMAC-SHA256 signature, timestamp window and payload shape.\n// Nothing in the body is processed until authenticity is cryptographically proven.\nconst crypto = require('crypto');\n\nconst secret = $env.N8N_SIGNING_SECRET;\nif (!secret) {\n  throw new Error('N8N_SIGNING_SECRET is not configured in the n8n environment');\n}\n\nconst MAX_AGE_SECONDS = 300;\n\nconst reject = (reason) => {\n  console.warn('[LendLoop][webhook] rejected: ' + reason);\n  return [{ json: { valid: false, duplicate: false, reason } }];\n};\n\nconst first = $input.first().json;\nconst headers = first.headers || {};\nconst rawSigHeader = String(headers['x-lendloop-signature'] || '');\nlet timestamp = String(headers['x-lendloop-timestamp'] || '');\n\n// Support both format: t=<unix_ms>,v1=<hex> and raw hex signature\nlet receivedSig = rawSigHeader;\nif (rawSigHeader.includes('v1=')) {\n  const parts = rawSigHeader.split(',');\n  for (const part of parts) {\n    const [k, v] = part.split('=');\n    if (k === 't' && !timestamp) timestamp = v;\n    if (k === 'v1') receivedSig = v;\n  }\n}\n\n// Extract raw body bytes exactly as received\nlet rawBody;\ntry {\n  const buffer = await this.helpers.getBinaryDataBuffer(0, 'data');\n  rawBody = buffer.toString('utf8');\n} catch (error) {\n  rawBody = JSON.stringify(first.body || first);\n}\n\n// Parse and validate timestamp against replay attacks\nlet ts = Number(timestamp);\nif (ts > 10000000000) {\n  ts = Math.floor(ts / 1000);\n}\n\nif (!timestamp || !Number.isFinite(ts)) return reject('bad_timestamp');\nif (Math.abs(Date.now() / 1000 - ts) > MAX_AGE_SECONDS) return reject('stale_timestamp');\n\n// Compute HMAC with timestamp prefix\nconst expected = crypto\n  .createHmac('sha256', secret)\n  .update(timestamp + '.' + rawBody)\n  .digest('hex');\n\nconst expectedBuf = Buffer.from(expected, 'utf8');\nconst givenBuf = Buffer.from(receivedSig, 'utf8');\n\nif (expectedBuf.length !== givenBuf.length || !crypto.timingSafeEqual(expectedBuf, givenBuf)) {\n  // In case sender used seconds or ms without dot\n  const expectedAlt = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');\n  if (receivedSig !== expectedAlt) {\n    return reject('bad_signature');\n  }\n}\n\nlet rawEvent;\ntry {\n  rawEvent = typeof rawBody === 'string' ? JSON.parse(rawBody) : rawBody;\n} catch (error) {\n  return reject('bad_json');\n}\n\n// Normalize event shape (support both { event, payload } and direct payload)\nconst event = {\n  type: rawEvent.type || rawEvent.event,\n  loanId: rawEvent.loanId || (rawEvent.payload && rawEvent.payload.loanId),\n  toolName: rawEvent.toolName || (rawEvent.payload && rawEvent.payload.toolName) || 'Tool',\n  startDate: rawEvent.startDate || (rawEvent.payload && rawEvent.payload.startDate) || '',\n  endDate: rawEvent.endDate || (rawEvent.payload && rawEvent.payload.endDate) || '',\n  actorName: rawEvent.actorName || (rawEvent.payload && (rawEvent.payload.borrowerName || rawEvent.payload.lenderName)) || 'A neighbor',\n  recipient: rawEvent.recipient || {\n    email: (rawEvent.payload && rawEvent.payload.borrowerEmail) || 'neighbor@lendloop.local',\n    displayName: (rawEvent.payload && rawEvent.payload.borrowerName) || 'Neighbor'\n  },\n  eventId: rawEvent.eventId || (rawEvent.loanId ? ('evt_' + rawEvent.loanId + '_' + Date.now()) : ('evt_' + Date.now()))\n};\n\nif (!event.type || !event.loanId) {\n  return reject('bad_payload');\n}\n\n// In-memory deduplication cache check\nconst processed = $getWorkflowStaticData('global').processed || {};\nconst duplicate = Boolean(processed[event.eventId] || processed[event.loanId + ':' + event.type]);\n\nreturn [{ json: { valid: true, duplicate, event } }];\n"
       },
-      "id": "node-verify-hmac",
-      "name": "Verify HMAC & Replay",
+      "id": "a8997061-8dca-4998-8add-da83dcb234ad",
+      "name": "Verify signature",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 300]
+      "position": [
+        420,
+        300
+      ]
     },
     {
       "parameters": {
-        "dataType": "string",
-        "value1": "={{ $json.event }}",
-        "rules": {
-          "rules": [
-            { "value2": "loan.requested", "output": 0 },
-            { "value2": "loan.approved", "output": 1 },
-            { "value2": "loan.declined", "output": 2 },
-            { "value2": "loan.cancelled", "output": 3 },
-            { "value2": "loan.returned", "output": 4 }
-          ]
-        }
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "726e2dc0-5adc-4746-be22-ce9976b87402",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
       },
-      "id": "node-route-event",
-      "name": "Route by Event",
-      "type": "n8n-nodes-base.switch",
-      "typeVersion": 1,
-      "position": [660, 300]
-    },
-    {
-      "parameters": {
-        "jsCode": "const item = $input.first().json;\nconsole.log(`[LendLoop Notification] New Request: ${item.payload.borrowerName} requested ${item.payload.toolName}`);\nreturn [{ json: { sent: true, channel: 'mock_email', recipient: item.payload.borrowerName, event: item.event } }];"
-      },
-      "id": "node-notify-requested",
-      "name": "Notify: Request Created",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [900, 140]
-    },
-    {
-      "parameters": {
-        "jsCode": "const item = $input.first().json;\nconsole.log(`[LendLoop Notification] Approved: ${item.payload.toolName} approved by ${item.payload.lenderName}`);\nreturn [{ json: { sent: true, channel: 'mock_email', event: item.event } }];"
-      },
-      "id": "node-notify-approved",
-      "name": "Notify: Request Approved",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [900, 260]
-    },
-    {
-      "parameters": {
-        "jsCode": "const item = $input.first().json;\nconsole.log(`[LendLoop Notification] Status Update: ${item.event} for tool ${item.payload.toolName}`);\nreturn [{ json: { sent: true, channel: 'mock_email', event: item.event } }];"
-      },
-      "id": "node-notify-other",
-      "name": "Notify: Status Change",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [900, 420]
+      "id": "14f3227a-9ace-4dd8-858d-32102678e027",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        640,
+        300
+      ]
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "{\n  \"ok\": true,\n  \"received\": true\n}",
+        "responseBody": "{\"ok\": false, \"error\": \"invalid_signature\"}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "789a68b0-e19b-4bd1-8e58-72b3a0369804",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "0dda3121-7f6c-4a98-9242-b97d29e0f4d2",
+              "leftValue": "={{ $json.duplicate }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
         "options": {}
       },
-      "id": "node-respond-200",
-      "name": "Respond to Webhook",
+      "id": "5521ec94-f846-4f4e-bb53-1332f165820d",
+      "name": "Already processed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"ok\": true, \"duplicate\": true}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "fd9440c0-163c-4d11-ae44-f16f698a5e37",
+      "name": "Respond duplicate",
       "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1,
-      "position": [1160, 300]
+      "typeVersion": 1.1,
+      "position": [
+        1120,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Selects the appropriate friendly template using minimized event details\nconst event = $json.event;\nconst tool = event.toolName;\nconst range = (event.startDate && event.endDate) ? (event.startDate + ' to ' + event.endDate) : 'upcoming dates';\nconst other = event.actorName || 'A neighbor';\n\nconst templates = {\n  'request.created': {\n    subject: 'New borrow request for ' + tool,\n    text: other + ' would like to borrow \"' + tool + '\" (' + range + '). Open LendLoop to review and approve.',\n  },\n  'loan.requested': {\n    subject: 'New borrow request for ' + tool,\n    text: other + ' would like to borrow \"' + tool + '\" (' + range + '). Open LendLoop to review and approve.',\n  },\n  'request.approved': {\n    subject: 'Your request for ' + tool + ' was approved!',\n    text: 'Good news: your request to borrow \"' + tool + '\" (' + range + ') has been approved by ' + other + '.',\n  },\n  'loan.approved': {\n    subject: 'Your request for ' + tool + ' was approved!',\n    text: 'Good news: your request to borrow \"' + tool + '\" (' + range + ') has been approved by ' + other + '.',\n  },\n  'request.declined': {\n    subject: 'Update on request for ' + tool,\n    text: 'Your request to borrow \"' + tool + '\" (' + range + ') could not be accommodated at this time.',\n  },\n  'loan.declined': {\n    subject: 'Update on request for ' + tool,\n    text: 'Your request to borrow \"' + tool + '\" (' + range + ') could not be accommodated at this time.',\n  },\n  'request.cancelled': {\n    subject: 'Request for ' + tool + ' was cancelled',\n    text: other + ' cancelled the request to borrow \"' + tool + '\" (' + range + ').',\n  },\n  'loan.cancelled': {\n    subject: 'Request for ' + tool + ' was cancelled',\n    text: other + ' cancelled the request to borrow \"' + tool + '\" (' + range + ').',\n  },\n  'request.returned': {\n    subject: tool + ' has been marked returned',\n    text: '\"' + tool + '\" was marked returned. Thank you for sharing equipment with your block!',\n  },\n  'loan.returned': {\n    subject: tool + ' has been marked returned',\n    text: '\"' + tool + '\" was marked returned. Thank you for sharing equipment with your block!',\n  },\n};\n\nconst template = templates[event.type] || {\n  subject: 'Notification for ' + tool,\n  text: 'There is a status update for your tool \"' + tool + '\".',\n};\n\nreturn {\n  json: {\n    eventId: event.eventId,\n    loanId: event.loanId,\n    type: event.type,\n    to: event.recipient?.email || 'neighbor@lendloop.local',\n    toName: event.recipient?.displayName || 'Neighbor',\n    subject: template.subject,\n    text: template.text,\n  },\n};\n"
+      },
+      "id": "14cb927a-ae8e-4dde-b992-933517867b7b",
+      "name": "Build message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// MOCK notification logger (allowed by project spec).\n// Prints masked PII log entry in n8n execution console.\nconst maskEmail = (email) => {\n  const [name, domain] = String(email).split('@');\n  return (name ? name[0] : '?') + '***@' + (domain || '?');\n};\n\nconsole.log(\n  '[LendLoop][notification] ' +\n    JSON.stringify({\n      eventId: $json.eventId,\n      loanId: $json.loanId,\n      type: $json.type,\n      to: maskEmail($json.to),\n      subject: $json.subject,\n    }),\n);\n\nreturn { json: { ...$json, channel: 'mock-log' } };\n"
+      },
+      "id": "fae31999-c753-4658-82b7-36c52b5dee08",
+      "name": "Send notification (mock)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL || $env.CONVEX_HTTP_URL }}/automation-events",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lendloop-api-secret",
+              "value": "={{ $env.N8N_API_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ type: 'request_notification', loanId: $json.loanId, eventId: $json.eventId, idempotencyKey: 'notify:' + $json.eventId, status: 'sent', detail: $json.channel }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "556037f9-155e-4c9d-91ca-43506d69344c",
+      "name": "Write back activity",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "Posts activity to Convex. Idempotent on notify:<eventId>."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Marks eventId as processed to block duplicate webhooks from notifying twice.\nconst staticData = $getWorkflowStaticData('global');\nconst processed = staticData.processed || {};\nconst eventId = $('Verify signature').first().json.event.eventId;\n\nprocessed[eventId] = Date.now();\n\n// Prune to maintain fixed memory footprint\nconst MAX_REMEMBERED = 500;\nconst keys = Object.keys(processed);\nif (keys.length > MAX_REMEMBERED) {\n  keys\n    .sort((a, b) => processed[a] - processed[b])\n    .slice(0, keys.length - MAX_REMEMBERED)\n    .forEach((key) => delete processed[key]);\n}\n\nstaticData.processed = processed;\nreturn { json: { ok: true, eventId } };\n"
+      },
+      "id": "c1085fa2-f4c1-47cf-95e1-38a85da62489",
+      "name": "Mark processed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"ok\": true}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "3277eea6-a773-42db-ab2b-e0bc0309364b",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2000,
+        300
+      ]
     }
   ],
   "connections": {
     "Webhook": {
       "main": [
-        [{ "node": "Verify HMAC & Replay", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Verify signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Verify HMAC & Replay": {
+    "Verify signature": {
       "main": [
-        [{ "node": "Route by Event", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Route by Event": {
+    "Signature valid?": {
       "main": [
-        [{ "node": "Notify: Request Created", "type": "main", "index": 0 }],
-        [{ "node": "Notify: Request Approved", "type": "main", "index": 0 }],
-        [{ "node": "Notify: Status Change", "type": "main", "index": 0 }],
-        [{ "node": "Notify: Status Change", "type": "main", "index": 0 }],
-        [{ "node": "Notify: Status Change", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Already processed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Notify: Request Created": {
+    "Already processed?": {
       "main": [
-        [{ "node": "Respond to Webhook", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Respond duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build message",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Notify: Request Approved": {
+    "Build message": {
       "main": [
-        [{ "node": "Respond to Webhook", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Send notification (mock)",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Notify: Status Change": {
+    "Send notification (mock)": {
       "main": [
-        [{ "node": "Respond to Webhook", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Write back activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write back activity": {
+      "main": [
+        [
+          {
+            "node": "Mark processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark processed": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
+  "active": false,
+  "pinData": {},
   "settings": {
-    "executionOrder": "v1"
-  }
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
 }

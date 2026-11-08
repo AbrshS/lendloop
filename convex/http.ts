@@ -1,13 +1,14 @@
 /**
  * http.ts — HTTP routes n8n calls back into Convex.
  *
- * Both routes are guarded by a shared API secret (N8N_API_SECRET) sent in the
- * `X-LendLoop-Api-Secret` header. They never touch ctx.db directly — HTTP
- * actions can't — so they delegate to internal query/mutation handlers.
+ * Both routes are guarded by a shared API secret (N8N_API_SECRET) sent in either:
+ *   - `x-lendloop-api-secret: <secret>` header
+ *   - `Authorization: Bearer <secret>` header
  *
  * Routes:
- *   GET  /overdue-loans    -> list overdue loans (minimized) for the reminder sweep
- *   POST /reminder-status  -> record a sent reminder idempotently
+ *   GET  /overdue-loans      -> list overdue loans ({ loans: [...] }) for the reminder sweep
+ *   POST /reminder-status    -> record a sent reminder idempotently
+ *   POST /automation-events  -> record an automation activity event idempotently
  *
  * @see docs/SECURITY.md for the auth scheme.
  */
@@ -18,11 +19,19 @@ import { loadSecrets } from './security/secrets';
 
 const API_SECRET_HEADER = 'x-lendloop-api-secret';
 
-/** Verify the inbound shared secret; returns 401 JSON on mismatch. */
+/** Verify the inbound shared secret; returns true if either header matches. */
 function authorize(request: Request): boolean {
   const secrets = loadSecrets();
-  const provided = request.headers.get(API_SECRET_HEADER);
-  return !!provided && provided === secrets.n8nApiSecret;
+  const providedCustom = request.headers.get(API_SECRET_HEADER);
+  const authHeader = request.headers.get('authorization');
+  const bearerToken = authHeader?.toLowerCase().startsWith('bearer ')
+    ? authHeader.slice(7).trim()
+    : null;
+
+  return !!(
+    (providedCustom && providedCustom === secrets.n8nApiSecret) ||
+    (bearerToken && bearerToken === secrets.n8nApiSecret)
+  );
 }
 
 function unauthorized(): Response {
@@ -33,17 +42,21 @@ function unauthorized(): Response {
 const overdueLoans = httpAction(async (ctx, request) => {
   if (!authorize(request)) return unauthorized();
   const entries = await ctx.runQuery(internal.automation.listOverdueLoans, {});
-  return Response.json({ overdue: entries });
+  // Return both 'loans' (for standard splitOut) and 'overdue' (backwards compat)
+  return Response.json({ loans: entries, overdue: entries });
 });
 
-/** POST /reminder-status — idempotently record a sent reminder. */
-const reminderStatus = httpAction(async (ctx, request) => {
+/** POST /automation-events & /reminder-status — idempotently record activity / reminder. */
+const recordAutomationEvent = httpAction(async (ctx, request) => {
   if (!authorize(request)) return unauthorized();
 
   let body: {
-    loanId: string;
-    idempotencyKey: string;
-    type: string;
+    loanId?: string;
+    idempotencyKey?: string;
+    type?: string;
+    status?: string;
+    detail?: string;
+    eventId?: string;
     payload?: unknown;
   };
   try {
@@ -59,11 +72,20 @@ const reminderStatus = httpAction(async (ctx, request) => {
     );
   }
 
+  const payload =
+    body.payload !== undefined
+      ? body.payload
+      : {
+          status: body.status,
+          detail: body.detail,
+          eventId: body.eventId,
+        };
+
   const recorded = await ctx.runMutation(internal.automation.recordReminder, {
     loanId: body.loanId as any,
     idempotencyKey: body.idempotencyKey,
     type: body.type,
-    payload: body.payload ?? null,
+    payload,
   });
 
   return Response.json({ ok: true, recorded });
@@ -79,7 +101,12 @@ http.route({
 http.route({
   path: '/reminder-status',
   method: 'POST',
-  handler: reminderStatus,
+  handler: recordAutomationEvent,
+});
+http.route({
+  path: '/automation-events',
+  method: 'POST',
+  handler: recordAutomationEvent,
 });
 
 export default http;

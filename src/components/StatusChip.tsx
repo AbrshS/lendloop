@@ -106,3 +106,4 @@ export function StatusChip({ status, label, className }: StatusChipProps) {
     </span>
   );
 }
+

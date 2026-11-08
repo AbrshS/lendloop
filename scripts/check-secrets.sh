@@ -43,3 +43,4 @@ else
   echo "🚨 Secrets check failed. Please remove secrets before pushing."
   exit 1
 fi
+

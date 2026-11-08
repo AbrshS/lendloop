@@ -18,3 +18,4 @@ export function formatDate(msOrIso: number | string | Date): string {
     ? `${month} ${day}`
     : `${month} ${day}, ${d.getUTCFullYear()}`;
 }
+

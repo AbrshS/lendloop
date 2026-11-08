@@ -1,33 +1,91 @@
 {
-  "name": "LendLoop - Error Workflow",
+  "name": "LendLoop - Error alert",
   "nodes": [
     {
       "parameters": {},
-      "id": "node-error-trigger",
+      "id": "caf9443a-1b60-433c-80e7-88bcb46c9aa1",
       "name": "Error Trigger",
       "type": "n8n-nodes-base.errorTrigger",
       "typeVersion": 1,
-      "position": [200, 300]
+      "position": [
+        200,
+        300
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const errData = $input.first().json;\nconst workflowName = errData.workflow?.name || 'Unknown Workflow';\nconst errorMsg = errData.execution?.error?.message || 'Unknown error occurred';\nconst executionId = errData.execution?.id || 'n/a';\n\nconsole.error(`[LendLoop Automation Error] Workflow: ${workflowName} (Execution: ${executionId}) failed: ${errorMsg}`);\n\nreturn [{\n  json: {\n    alert: true,\n    workflow: workflowName,\n    executionId,\n    errorMessage: errorMsg,\n    timestamp: new Date().toISOString()\n  }\n}];"
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Turns an n8n execution failure into an alert log.\n// Outputs structured alert so silent failures never happen.\nconst data = $json;\nconst execution = data.execution || {};\nconst workflow = data.workflow || {};\nconst error = execution.error || {};\n\nconst message = [\n  '🚨 [LendLoop Automation Failure]',\n  'Workflow: ' + (workflow.name || 'Unknown workflow'),\n  'Failed node: ' + (execution.lastNodeExecuted || 'Unknown node'),\n  'Error: ' + (error.message || 'Unknown error'),\n  'Execution ID: ' + (execution.id || 'N/A'),\n  'Retry Count: ' + (execution.retryOf || '0'),\n].join('\\n');\n\nconsole.error('[LendLoop][ERROR_ALERT] ' + message.replace(/\\n/g, ' | '));\n\nreturn [{\n  json: {\n    message,\n    workflow: workflow.name || null,\n    executionId: execution.id || null,\n    failedNode: execution.lastNodeExecuted || null,\n    timestamp: new Date().toISOString()\n  }\n}];\n"
       },
-      "id": "node-log-error-alert",
-      "name": "Log & Alert Error",
+      "id": "7f154242-2002-4ae4-84b3-cff9ae9e88ef",
+      "name": "Format alert",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 300]
+      "position": [
+        420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ALERT_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ content: $json.message, text: $json.message }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "063ce040-e6f4-4b8a-ae1c-f3a2e5740098",
+      "name": "Send alert (Slack/Discord webhook)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        300
+      ],
+      "disabled": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "Disabled by default. Set ALERT_WEBHOOK_URL to your team's Slack/Discord webhook URL to enable real-time alert pings. The alert is always logged by Format alert."
     }
   ],
   "connections": {
     "Error Trigger": {
       "main": [
-        [{ "node": "Log & Alert Error", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Format alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format alert": {
+      "main": [
+        [
+          {
+            "node": "Send alert (Slack/Discord webhook)",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
+  "active": false,
+  "pinData": {},
   "settings": {
-    "executionOrder": "v1"
-  }
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
 }

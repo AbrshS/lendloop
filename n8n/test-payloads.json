@@ -1,0 +1,82 @@
+{
+  "request_created": {
+    "description": "Triggered when a borrower requests a tool from a neighbor",
+    "headers": {
+      "Content-Type": "application/json",
+      "x-lendloop-signature": "t=1794134067000,v1=a4cf71c0369284005594e4a86d20a211c831098d7b643c2c20a92e68ed416387",
+      "x-lendloop-timestamp": "1794134067"
+    },
+    "body": {
+      "type": "request.created",
+      "eventId": "evt_test_loan_99182",
+      "loanId": "jh7c46g3249j4r1w02z3fxr7px74a4x8",
+      "toolName": "DeWalt DWS779 12-inch Miter Saw",
+      "startDate": "2026-11-10",
+      "endDate": "2026-11-14",
+      "actorName": "Marcus Thompson",
+      "recipient": {
+        "email": "marcus.t@lendloop.local",
+        "displayName": "Marcus Thompson"
+      }
+    }
+  },
+  "request_approved": {
+    "description": "Triggered when a lender approves a loan request",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "type": "request.approved",
+      "eventId": "evt_test_loan_99183",
+      "loanId": "jh7c46g3249j4r1w02z3fxr7px74a4x8",
+      "toolName": "DeWalt DWS779 12-inch Miter Saw",
+      "startDate": "2026-11-10",
+      "endDate": "2026-11-14",
+      "actorName": "Elena Rostova",
+      "recipient": {
+        "email": "marcus.t@lendloop.local",
+        "displayName": "Marcus Thompson"
+      }
+    }
+  },
+  "overdue_loans_endpoint_response": {
+    "description": "Sample JSON returned by Convex GET /overdue-loans",
+    "status": 200,
+    "response": {
+      "loans": [
+        {
+          "loanId": "jh7c46g3249j4r1w02z3fxr7px74a4x8",
+          "toolName": "Bosch Bulldog Rotary Hammer",
+          "borrowerName": "Julian Chen",
+          "borrowerEmail": "julian.chen@lendloop.local",
+          "endDate": "2026-11-05",
+          "dueDate": "2026-11-05",
+          "daysOverdue": 3
+        },
+        {
+          "loanId": "k82d95h4350k5s2x13a4gyr8qy85b5y9",
+          "toolName": "Werner 22ft Pro Multi-Position Ladder",
+          "borrowerName": "Sarah Jenkins",
+          "borrowerEmail": "sarah.j@lendloop.local",
+          "endDate": "2026-11-07",
+          "dueDate": "2026-11-07",
+          "daysOverdue": 1
+        }
+      ]
+    }
+  },
+  "writeback_payload": {
+    "description": "Sent by n8n to Convex POST /automation-events after notification delivery",
+    "headers": {
+      "Content-Type": "application/json",
+      "x-lendloop-api-secret": "dev_api_secret_12345678"
+    },
+    "body": {
+      "type": "overdue_reminder",
+      "loanId": "jh7c46g3249j4r1w02z3fxr7px74a4x8",
+      "idempotencyKey": "overdue:jh7c46g3249j4r1w02z3fxr7px74a4x8:2026-11-08",
+      "status": "sent",
+      "detail": "mock-log"
+    }
+  }
+}

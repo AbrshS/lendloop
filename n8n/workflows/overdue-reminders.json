@@ -1,112 +1,262 @@
 {
-  "name": "LendLoop - Overdue Reminders",
+  "name": "LendLoop - Overdue reminders",
   "nodes": [
     {
       "parameters": {
         "rule": {
           "interval": [
             {
-              "field": "cronExpression",
-              "expression": "0 9 * * *"
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9
             }
           ]
         }
       },
-      "id": "node-schedule-daily",
-      "name": "Schedule (Daily 09:00)",
+      "id": "e9db032a-a46a-49b9-9067-e2d91db1073e",
+      "name": "Daily at 09:00",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [200, 300]
+      "position": [
+        200,
+        300
+      ]
     },
     {
       "parameters": {
-        "url": "={{ $env.CONVEX_HTTP_URL || 'http://localhost:3000' }}/overdue-loans",
         "method": "GET",
+        "url": "={{ $env.CONVEX_SITE_URL || $env.CONVEX_HTTP_URL }}/overdue-loans",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "x-lendloop-api-secret",
-              "value": "={{ $env.N8N_API_SECRET || 'dev_api_secret_123' }}"
+              "value": "={{ $env.N8N_API_SECRET }}"
             }
           ]
         },
-        "options": {}
+        "options": {
+          "timeout": 15000
+        }
       },
-      "id": "node-fetch-overdue",
-      "name": "Fetch Overdue Loans",
+      "id": "0d6fe624-82f5-4e07-b992-9decac2f13c9",
+      "name": "Fetch overdue loans",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [420, 300]
+      "position": [
+        420,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "Calls Convex GET /overdue-loans with API secret. Returns: { loans: [ { loanId, toolName, borrowerName, borrowerEmail, endDate, daysOverdue } ] }"
     },
     {
       "parameters": {
-        "jsCode": "const response = $input.first().json;\nconst overdue = response.overdue || [];\nif (overdue.length === 0) {\n  return [];\n}\n\nconst today = new Date().toISOString().split('T')[0];\nreturn overdue.map((loan) => ({\n  json: {\n    ...loan,\n    today,\n    idempotencyKey: `overdue:${loan.loanId}:${today}`\n  }\n}));"
+        "fieldToSplitOut": "loans",
+        "options": {}
       },
-      "id": "node-split-overdue",
-      "name": "Split & Generate Keys",
+      "id": "01377725-33ee-4787-b1c8-f1d77764058b",
+      "name": "Split loans",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// One item per overdue loan from Convex.\n// Builds the message and generates the idempotent key: one reminder per loan per day.\nconst loan = $json;\nconst today = new Date().toISOString().slice(0, 10);\nconst days = Number(loan.daysOverdue) || 0;\nconst dayWord = days === 1 ? 'day' : 'days';\n\nreturn {\n  json: {\n    loanId: loan.loanId,\n    idempotencyKey: 'overdue:' + loan.loanId + ':' + today,\n    to: loan.borrowerEmail || 'borrower@lendloop.local',\n    toName: loan.borrowerName || 'Neighbor',\n    subject: 'Reminder: please return ' + loan.toolName,\n    text:\n      'Hi ' + (loan.borrowerName || 'there') + ', \"' + loan.toolName + '\" was due on ' +\n      (loan.endDate || loan.dueDate) + ' and is ' + days + ' ' + dayWord + ' overdue. ' +\n      'Please return it to your neighbor as soon as you can.',\n  },\n};\n"
+      },
+      "id": "ade26610-f1b3-46ca-a496-c3fd0e9eb79d",
+      "name": "Build reminder",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [640, 300]
+      "position": [
+        860,
+        300
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const item = $input.first().json;\nconsole.log(`[LendLoop Overdue Reminder] Sent to ${item.borrowerName} for ${item.toolName} (Due ${item.dueDate}, ${item.daysOverdue} days overdue)`);\nreturn [{ json: item }];"
+        "mode": "runOnceForEachItem",
+        "jsCode": "// MOCK delivery channel (allowed by spec).\n// Logs notification to n8n console.\n// Protected by onError: continueErrorOutput so an individual failure never blocks the rest of the batch.\nif (!$json.to) {\n  throw new Error('Missing recipient for loan ' + $json.loanId);\n}\n\nconst [name, domain] = String($json.to).split('@');\nconst masked = (name ? name[0] : '?') + '***@' + (domain || '?');\n\nconsole.log(\n  '[LendLoop][reminder] ' +\n    JSON.stringify({\n      loanId: $json.loanId,\n      to: masked,\n      subject: $json.subject,\n    }),\n);\n\nreturn { json: { ...$json, channel: 'mock-log' } };\n"
       },
-      "id": "node-send-reminder",
-      "name": "Send Overdue Reminder",
+      "id": "816f6385-f1b6-430e-a7eb-b2859a759645",
+      "name": "Send reminder (mock)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [860, 300]
+      "position": [
+        1080,
+        300
+      ],
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
-        "url": "={{ $env.CONVEX_HTTP_URL || 'http://localhost:3000' }}/reminder-status",
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Formats the write-back payload for Convex whether delivery succeeded or failed.\nconst base = $('Build reminder').item.json;\nconst failed = Boolean($json.error);\nconst reason = failed\n  ? String(($json.error && $json.error.message) || $json.error).slice(0, 200)\n  : 'mock-log';\n\nreturn {\n  json: {\n    type: 'overdue_reminder',\n    loanId: base.loanId,\n    idempotencyKey: base.idempotencyKey,\n    status: failed ? 'failed' : 'sent',\n    detail: reason,\n  },\n};\n"
+      },
+      "id": "b388cacc-b3bd-4249-8d0f-bbf0213ab2ce",
+      "name": "Prepare write-back",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        300
+      ]
+    },
+    {
+      "parameters": {
         "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL || $env.CONVEX_HTTP_URL }}/automation-events",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "x-lendloop-api-secret",
-              "value": "={{ $env.N8N_API_SECRET || 'dev_api_secret_123' }}"
+              "value": "={{ $env.N8N_API_SECRET }}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"loanId\": \"{{ $json.loanId }}\",\n  \"idempotencyKey\": \"{{ $json.idempotencyKey }}\",\n  \"type\": \"overdue_reminder\",\n  \"payload\": {\n    \"daysOverdue\": {{ $json.daysOverdue }},\n    \"dueDate\": \"{{ $json.dueDate }}\"\n  }\n}",
-        "options": {}
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 10000
+        }
       },
-      "id": "node-record-status",
-      "name": "Record Status (Idempotent)",
+      "id": "18a7483f-32f5-42ee-9978-36da3358f5e8",
+      "name": "Write back reminder status",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1080, 300]
+      "position": [
+        1520,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "Writes back to Convex /automation-events (or /reminder-status). Idempotent on idempotencyKey."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Asserts all items were delivered. If any failed, triggers workflow failure\n// so the configured Error Trigger workflow will alert.\nconst prepared = $('Prepare write-back').all();\nconst failed = prepared.filter((item) => item.json.status === 'failed');\n\nif (failed.length > 0) {\n  throw new Error(\n    failed.length + ' of ' + prepared.length + ' overdue reminders failed (loanIds: ' +\n      failed.map((item) => item.json.loanId).join(', ') + ')',\n  );\n}\n\nreturn [{ json: { ok: true, reminders: prepared.length } }];\n"
+      },
+      "id": "f2daf7f7-69b4-4741-a547-7e66ae11977d",
+      "name": "Fail run if any reminder failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        300
+      ]
     }
   ],
   "connections": {
-    "Schedule (Daily 09:00)": {
+    "Daily at 09:00": {
       "main": [
-        [{ "node": "Fetch Overdue Loans", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Fetch overdue loans",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Fetch Overdue Loans": {
+    "Fetch overdue loans": {
       "main": [
-        [{ "node": "Split & Generate Keys", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Split loans",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Split & Generate Keys": {
+    "Split loans": {
       "main": [
-        [{ "node": "Send Reminder", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Build reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Send Reminder": {
+    "Build reminder": {
       "main": [
-        [{ "node": "Record Status (Idempotent)", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Send reminder (mock)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send reminder (mock)": {
+      "main": [
+        [
+          {
+            "node": "Prepare write-back",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare write-back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare write-back": {
+      "main": [
+        [
+          {
+            "node": "Write back reminder status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write back reminder status": {
+      "main": [
+        [
+          {
+            "node": "Fail run if any reminder failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
+  "active": false,
+  "pinData": {},
   "settings": {
-    "executionOrder": "v1"
-  }
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
 }

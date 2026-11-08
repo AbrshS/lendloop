@@ -39,6 +39,7 @@ export class N8nWebhookClient {
           headers: {
             'Content-Type': 'application/json',
             [SIGNATURE_HEADER]: signed.header,
+            'x-lendloop-timestamp': String(Math.floor(signed.timestamp / 1000)),
           },
           body,
         });

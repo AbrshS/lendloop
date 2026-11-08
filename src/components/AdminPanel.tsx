@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { useUser } from '@clerk/nextjs';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import { toast } from 'sonner';
@@ -10,9 +11,10 @@ import { formatDate } from '@/lib/utils';
 import type { Id } from '@/convex/_generated/dataModel';
 
 export function AdminPanel() {
+  const { isSignedIn } = useUser();
   const [adminTab, setAdminTab] = useState<'loans' | 'listings' | 'lenders'>('loans');
-  const allLoans = useQuery(api.admin.listAllLoans);
-  const allTools = useQuery(api.tools.listAll);
+  const allLoans = useQuery(api.admin.listAllLoans, isSignedIn ? {} : 'skip');
+  const allTools = useQuery(api.tools.listAll, isSignedIn ? {} : 'skip');
   const removeAnyTool = useMutation(api.admin.removeAnyTool);
   const setTrustedLender = useMutation(api.admin.setTrustedLender);
 

@@ -53,3 +53,4 @@ export function LoanActivityFeed({ loanId }: LoanActivityFeedProps) {
     </div>
   );
 }
+

@@ -129,7 +129,9 @@ export const listOverdueLoans = internalQuery({
           loanId: loan._id,
           toolName: tool?.name ?? 'unknown tool',
           borrowerName: borrower?.name ?? 'a borrower',
+          borrowerEmail: borrower?.email ?? '',
           dueDate: new Date(dueMs).toISOString().slice(0, 10),
+          endDate: new Date(dueMs).toISOString().slice(0, 10),
           daysOverdue,
         };
       }),
